@@ -1,1 +1,2 @@
 # numpyToFoam
+A custom OpenFOAM utility for reconstructing OpenFOAM field data from NumPy arrays. It supports scalar, vector, and tensor fields and allows the execution of OpenFOAM function objects internally.
