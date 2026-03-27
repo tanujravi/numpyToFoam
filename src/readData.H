@@ -14,6 +14,7 @@ struct NpyMeta
     std::vector<size_t> shape;
     bool is_f8{false};
     bool is_f4{false};
+    bool fortranOrder{false}; 
     std::streamoff dataOffset{0}; // where the raw array bytes start
 };
 static NpyMeta readNpyMeta(const fileName& filename)
@@ -32,7 +33,6 @@ static NpyMeta readNpyMeta(const fileName& filename)
 
     std::string header(header_len, ' ');
     f.read(&header[0], header_len);
-
     NpyMeta meta;
     meta.path = filename;
     meta.file = filename.name();
@@ -46,8 +46,23 @@ static NpyMeta readNpyMeta(const fileName& filename)
 
     meta.is_f8 = header.find("<f8") != std::string::npos;
     meta.is_f4 = header.find("<f4") != std::string::npos;
+
     if (!meta.is_f8 && !meta.is_f4)
         throw std::runtime_error("Unsupported dtype in " + std::string(filename));
+    // Parse Fortran order
+    if (header.find("fortran_order") != std::string::npos)
+    {
+        if (header.find("True") != std::string::npos)
+            meta.fortranOrder = true;
+        else if (header.find("False") != std::string::npos)
+            meta.fortranOrder = false;
+        else
+            throw std::runtime_error("Could not parse fortran_order in " + std::string(filename));
+    }
+    else
+    {
+        throw std::runtime_error("Missing fortran_order in header of " + std::string(filename));
+    }
 
     auto p1 = header.find("(");
     auto p2 = header.find(")");
@@ -110,9 +125,17 @@ static void readScalarSnapshot
     scalarField& snapshot
 )
 {
-    require(meta.shape.size() == 2, "Expected scalar npy with 2 dims (nCells, nTimes)");
-    const label nCells = meta.shape[0];
-    const label nTimes = meta.shape[1];
+    require(meta.shape.size() == 2, "Expected scalar npy with 2 dims");
+
+    const label n0 = meta.shape[0];
+    const label n1 = meta.shape[1];
+
+    label nCells, nTimes;
+
+    // Shape is still interpreted as (nCells, nTimes)
+    nCells = n0;
+    nTimes = n1;
+
     require(timeIndex >= 0 && timeIndex < nTimes, "timeIndex out of range");
 
     snapshot.setSize(nCells);
@@ -124,10 +147,26 @@ static void readScalarSnapshot
 
     for (label celli = 0; celli < nCells; ++celli)
     {
-        const std::streamoff idx = static_cast<std::streamoff>(celli)*nTimes + timeIndex;
+        std::streamoff idx;
+
+        if (!meta.fortranOrder)
+        {
+            // C-order: (nCells, nTimes)
+            // idx = cell*nTimes + time
+            idx = static_cast<std::streamoff>(celli)*nTimes + timeIndex;
+        }
+        else
+        {
+            // Fortran-order: (nCells, nTimes)
+            // idx = cell + time*nCells
+            idx = static_cast<std::streamoff>(celli)
+                + static_cast<std::streamoff>(timeIndex)*nCells;
+        }
+
         snapshot[celli] = readAtIndex(f, meta.is_f8, meta.dataOffset + idx*elemSize);
     }
 }
+
 
 static void readVectorSnapshot
 (
@@ -136,10 +175,12 @@ static void readVectorSnapshot
     vectorField& snapshot
 )
 {
-    require(meta.shape.size() == 3, "Expected vector npy with 3 dims (nCells, 3, nTimes)");
+    require(meta.shape.size() == 3, "Expected vector npy with 3 dims");
+
     const label nCells = meta.shape[0];
     const label nComp  = meta.shape[1];
     const label nTimes = meta.shape[2];
+
     require(nComp == 3, "Vector middle dim must be 3");
     require(timeIndex >= 0 && timeIndex < nTimes, "timeIndex out of range");
 
@@ -150,26 +191,43 @@ static void readVectorSnapshot
 
     const size_t elemSize = meta.is_f8 ? sizeof(double) : sizeof(float);
 
-    // row-major: idx = ((cell * 3 + comp) * nTimes + time)
     for (label celli = 0; celli < nCells; ++celli)
     {
-        double vx = 0, vy = 0, vz = 0;
+        double vx = 0.0, vy = 0.0, vz = 0.0;
+
+        for (label comp = 0; comp < 3; ++comp)
         {
-            const std::streamoff idx = (static_cast<std::streamoff>(celli)*3 + 0)*nTimes + timeIndex;
-            vx = readAtIndex(f, meta.is_f8, meta.dataOffset + idx*elemSize);
-        }
-        {
-            const std::streamoff idx = (static_cast<std::streamoff>(celli)*3 + 1)*nTimes + timeIndex;
-            vy = readAtIndex(f, meta.is_f8, meta.dataOffset + idx*elemSize);
-        }
-        {
-            const std::streamoff idx = (static_cast<std::streamoff>(celli)*3 + 2)*nTimes + timeIndex;
-            vz = readAtIndex(f, meta.is_f8, meta.dataOffset + idx*elemSize);
+            std::streamoff idx;
+
+            if (!meta.fortranOrder)
+            {
+                // C-order: (nCells, 3, nTimes)
+                // idx = ((cell*3 + comp)*nTimes + time)
+                idx =
+                    (static_cast<std::streamoff>(celli)*3 + comp)*nTimes
+                  + timeIndex;
+            }
+            else
+            {
+                // Fortran-order: (nCells, 3, nTimes)
+                // idx = cell + nCells*(comp + 3*time)
+                idx =
+                    static_cast<std::streamoff>(celli)
+                  + static_cast<std::streamoff>(nCells)*
+                    (comp + static_cast<std::streamoff>(3)*timeIndex);
+            }
+
+            const double val = readAtIndex(f, meta.is_f8, meta.dataOffset + idx*elemSize);
+
+            if (comp == 0) vx = val;
+            else if (comp == 1) vy = val;
+            else vz = val;
         }
 
         snapshot[celli] = vector(vx, vy, vz);
     }
 }
+
 static void readSymmTensorSnapshot
 (
     const NpyMeta& meta,
@@ -177,13 +235,13 @@ static void readSymmTensorSnapshot
     symmTensorField& snapshot
 )
 {
-    require(meta.shape.size() == 4, "Expected tensor npy with 4 dims (nCells, 3, 3, nTimes)");
-    const label nCells = meta.shape[0];
-    const label nA     = meta.shape[1];
-    const label nB     = meta.shape[2];
-    const label nTimes = meta.shape[3];
+    require(meta.shape.size() == 3, "Expected symmetric tensor npy with 3 dims");
 
-    require(nA == 3 && nB == 3, "Tensor dims must be 3x3");
+    const label nCells = meta.shape[0];
+    const label nComp  = meta.shape[1];
+    const label nTimes = meta.shape[2];
+
+    require(nComp == 6, "SymmTensor middle dim must be 6");
     require(timeIndex >= 0 && timeIndex < nTimes, "timeIndex out of range");
 
     snapshot.setSize(nCells);
@@ -193,30 +251,104 @@ static void readSymmTensorSnapshot
 
     const size_t elemSize = meta.is_f8 ? sizeof(double) : sizeof(float);
 
-    // row-major: idx = (((cell*3 + i)*3 + j)*nTimes + time)
     for (label celli = 0; celli < nCells; ++celli)
     {
-        double a[3][3];
+        double c[6];
 
-        for (label i = 0; i < 3; ++i)
-        for (label j = 0; j < 3; ++j)
+        for (label comp = 0; comp < 6; ++comp)
         {
-            const std::streamoff idx =
-                (((static_cast<std::streamoff>(celli)*3 + i)*3 + j)*nTimes + timeIndex);
+            std::streamoff idx;
 
-            a[i][j] = readAtIndex(f, meta.is_f8, meta.dataOffset + idx*elemSize);
+            if (!meta.fortranOrder)
+            {
+                // C-order: (nCells, 6, nTimes)
+                // idx = ((cell*6 + comp)*nTimes + time)
+                idx =
+                    (static_cast<std::streamoff>(celli)*6 + comp)*nTimes
+                  + timeIndex;
+            }
+            else
+            {
+                // Fortran-order: (nCells, 6, nTimes)
+                // idx = cell + nCells*(comp + 6*time)
+                idx =
+                    static_cast<std::streamoff>(celli)
+                  + static_cast<std::streamoff>(nCells)*
+                    (comp + static_cast<std::streamoff>(6)*timeIndex);
+            }
+
+            c[comp] = readAtIndex(f, meta.is_f8, meta.dataOffset + idx*elemSize);
         }
 
-        // Enforce symmetry (safe if stored tensor is nearly symmetric)
-        const scalar xx = a[0][0];
-        const scalar yy = a[1][1];
-        const scalar zz = a[2][2];
+        snapshot[celli] = symmTensor
+        (
+            c[0], // xx
+            c[1], // xy
+            c[2], // xz
+            c[3], // yy
+            c[4], // yz
+            c[5]  // zz
+        );
+    }
+}
 
-        const scalar xy = 0.5*(a[0][1] + a[1][0]);
-        const scalar xz = 0.5*(a[0][2] + a[2][0]);
-        const scalar yz = 0.5*(a[1][2] + a[2][1]);
+static void readTensorSnapshot
+(
+    const NpyMeta& meta,
+    const label timeIndex,
+    tensorField& snapshot
+)
+{
+    require(meta.shape.size() == 3, "Expected tensor npy with 3 dims");
 
-        // OpenFOAM symmTensor ctor order: xx, xy, xz, yy, yz, zz
-        snapshot[celli] = symmTensor(xx, xy, xz, yy, yz, zz);
+    const label nCells = meta.shape[0];
+    const label nComp  = meta.shape[1];
+    const label nTimes = meta.shape[2];
+
+    require(nComp == 9, "Tensor middle dim must be 9");
+    require(timeIndex >= 0 && timeIndex < nTimes, "timeIndex out of range");
+
+    snapshot.setSize(nCells);
+
+    std::ifstream f(meta.path.c_str(), std::ios::binary);
+    require(bool(f), "Cannot open " + std::string(meta.path));
+
+    const size_t elemSize = meta.is_f8 ? sizeof(double) : sizeof(float);
+
+    for (label celli = 0; celli < nCells; ++celli)
+    {
+        double c[9];
+
+        for (label comp = 0; comp < 9; ++comp)
+        {
+            std::streamoff idx;
+
+            if (!meta.fortranOrder)
+            {
+                // C-order: (nCells, 9, nTimes)
+                // idx = ((cell*9 + comp)*nTimes + time)
+                idx =
+                    (static_cast<std::streamoff>(celli)*9 + comp)*nTimes
+                  + timeIndex;
+            }
+            else
+            {
+                // Fortran-order: (nCells, 9, nTimes)
+                // idx = cell + nCells*(comp + 9*time)
+                idx =
+                    static_cast<std::streamoff>(celli)
+                  + static_cast<std::streamoff>(nCells)*
+                    (comp + static_cast<std::streamoff>(9)*timeIndex);
+            }
+
+            c[comp] = readAtIndex(f, meta.is_f8, meta.dataOffset + idx*elemSize);
+        }
+
+        snapshot[celli] = tensor
+        (
+            c[0], c[1], c[2],
+            c[3], c[4], c[5],
+            c[6], c[7], c[8]
+        );
     }
 }

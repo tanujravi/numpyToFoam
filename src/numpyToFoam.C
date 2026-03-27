@@ -64,22 +64,9 @@ int main(int argc, char *argv[])
             args.getOrDefault<fileName>("dict", "")
         )
     );
-    IOdictionary transportProperties
-    (
-        IOobject
-        (
-            "transportProperties",
-            runTime.constant(),   // constant/
-            mesh,                 // register into mesh database
-            IOobject::MUST_READ,
-            IOobject::NO_WRITE
-        )
-    );
 
     const bool is_write(dict.get<bool>("write"));
     wordList fields(dict.get<wordList>("fields"));
-    const bool is_postProcess(dict.get<bool>("postProcess"));
-    word order(dict.get<word>("order"));
     const dictionary& timeDict = dict.subDict("time");
     const scalar t_start = timeDict.get<scalar>("startTime");
     const scalar t_end   = timeDict.get<scalar>("endTime");
@@ -87,7 +74,17 @@ int main(int argc, char *argv[])
     label procNo = Pstream::myProcNo();
     fileName caseDir = runTime.path();     // .../case/processorN
     fileName rootCaseDir = caseDir.path(); // .../case
-    fileName dataDir = rootCaseDir/"data";
+    fileName dataSubDir = dict.lookupOrDefault<fileName>("dataDir", "data");
+    fileName dataDir;
+    
+    if (dataSubDir.isAbsolute())
+    {
+        dataDir = dataSubDir;
+    }
+    else
+    {
+        dataDir = rootCaseDir/dataSubDir;
+    }
 
     fileNameList files = readDir(dataDir, fileName::FILE);
     
@@ -99,10 +96,12 @@ int main(int argc, char *argv[])
     }
     timeValues[nSteps-1] = t_end;
 
-    Info << "Generated times: " << timeValues << endl;
 
-    
     HashTable<NpyMeta> metaByField; // fieldName -> meta
+    
+    bool hasRowMajor = false;
+    bool hasSinglePrecision = false;
+
     forAll(fields, fieldInd)
     {
         word fieldName = fields[fieldInd];
@@ -118,13 +117,22 @@ int main(int argc, char *argv[])
 
         NpyMeta meta = readNpyMeta(fullPath);
 
+        if (!meta.fortranOrder)
+        {
+            hasRowMajor = true;
+        }
+        if (!meta.is_f8)
+        {
+            hasSinglePrecision = true;
+        }
+
         metaByField.insert(fieldName, meta);
 
         // ---- PRINT INFO ----
         Info<< "Rank " << Pstream::myProcNo()
             << " | Loaded file: " << meta.file
             << " | Shape: (";
-
+        
         forAll(meta.shape, d)
         {
             Info<< meta.shape[d];
@@ -136,12 +144,30 @@ int main(int argc, char *argv[])
             << " | Type: " << (meta.is_f8 ? "float64" : "float32")
             << nl;
     }
-
+    
+    Info<< nl;
+    
+    if (hasRowMajor && Pstream::master())
+    {
+        WarningInFunction
+            << "Detected row-major (C-order) numpy arrays." << nl
+            << "    Reading snapshots will be inefficient due to non-contiguous access." << nl
+            << "    Consider saving data in column-major (Fortran-order) for better performance."
+            << nl << endl;
+    }
+    if (hasSinglePrecision && Pstream::master())
+    {
+        WarningInFunction
+            << "Fields stored as float32 (single precision)." << nl
+            << "    It will be converted to OpenFOAM double precision during write."
+            << nl << endl;
+    }
     runTime.setTime(timeValues[0], 0);
 
     HashTable<autoPtr<volScalarField>> scalarTemplates, scalarFields;
     HashTable<autoPtr<volVectorField>> vectorTemplates, vectorFields;
     HashTable<autoPtr<volSymmTensorField>> symmTensorTemplates, symmTensorFields;
+    HashTable<autoPtr<volTensorField>> tensorTemplates, tensorFields;
 
     forAll(fields, fieldInd)
     {
@@ -150,18 +176,55 @@ int main(int argc, char *argv[])
 
         if (meta.shape.size() == 2)
         {
-            scalarTemplates.insert
-            (
-                fieldName,
-                autoPtr<volScalarField>
+            autoPtr<volScalarField> tmpl;
+
+            fileName field0Path = runTime.path()/"0"/fieldName;
+
+            if (isFile(field0Path))
+            {
+                Info<< "Reading existing 0/" << fieldName << nl;
+
+                tmpl.reset
                 (
                     new volScalarField
                     (
-                        IOobject(fieldName, "0", mesh, IOobject::MUST_READ, IOobject::NO_WRITE, IOobject::NO_REGISTER),
+                        IOobject
+                        (
+                            fieldName,
+                            "0",
+                            mesh,
+                            IOobject::MUST_READ,
+                            IOobject::NO_WRITE,
+                            IOobject::NO_REGISTER
+                        ),
                         mesh
                     )
-                )
-            );
+                );
+            }
+            else
+            {
+                Info<< "Creating field " << fieldName << " (no 0/ file)" << nl;
+
+                tmpl.reset
+                (
+                    new volScalarField
+                    (
+                        IOobject
+                        (
+                            fieldName,
+                            runTime.timeName(),
+                            mesh,
+                            IOobject::NO_READ,
+                            IOobject::NO_WRITE,
+                            IOobject::NO_REGISTER
+                        ),
+                        mesh,
+                        dimensionedScalar(fieldName, dimless, 0.0)
+                    )
+                );
+            }
+
+            scalarTemplates.insert(fieldName, tmpl);
 
             scalarFields.insert
             (
@@ -176,20 +239,58 @@ int main(int argc, char *argv[])
                 )
             );
         }
-        else if (meta.shape.size() == 3)
+
+        else if (meta.shape.size() == 3 && meta.shape[1] == 3)
         {
-            vectorTemplates.insert
-            (
-                fieldName,
-                autoPtr<volVectorField>
+            autoPtr<volVectorField> tmpl;
+
+            fileName field0Path = runTime.path()/"0"/fieldName;
+
+            if (isFile(field0Path))
+            {
+                Info<< "Reading existing 0/" << fieldName << nl;
+
+                tmpl.reset
                 (
                     new volVectorField
                     (
-                        IOobject(fieldName, "0", mesh, IOobject::MUST_READ, IOobject::NO_WRITE, IOobject::NO_REGISTER),
+                        IOobject
+                        (
+                            fieldName,
+                            "0",
+                            mesh,
+                            IOobject::MUST_READ,
+                            IOobject::NO_WRITE,
+                            IOobject::NO_REGISTER
+                        ),
                         mesh
                     )
-                )
-            );
+                );
+            }
+            else
+            {
+                Info<< "Creating vector field " << fieldName << " (no 0/ file)" << nl;
+
+                tmpl.reset
+                (
+                    new volVectorField
+                    (
+                        IOobject
+                        (
+                            fieldName,
+                            runTime.timeName(),
+                            mesh,
+                            IOobject::NO_READ,
+                            IOobject::NO_WRITE,
+                            IOobject::NO_REGISTER
+                        ),
+                        mesh,
+                        dimensionedVector(fieldName, dimless, vector::zero)
+                    )
+                );
+            }
+
+            vectorTemplates.insert(fieldName, tmpl);
 
             vectorFields.insert
             (
@@ -198,26 +299,72 @@ int main(int argc, char *argv[])
                 (
                     new volVectorField
                     (
-                        IOobject(fieldName, runTime.timeName(), mesh, IOobject::NO_READ, IOobject::NO_WRITE, IOobject::REGISTER),
+                        IOobject
+                        (
+                            fieldName,
+                            runTime.timeName(),
+                            mesh,
+                            IOobject::NO_READ,
+                            IOobject::NO_WRITE,
+                            IOobject::REGISTER
+                        ),
                         vectorTemplates[fieldName]()
                     )
                 )
             );
         }
-        else if (meta.shape.size() == 4)
+
+        else if (meta.shape.size() == 3 && meta.shape[1] == 6)
         {
-            symmTensorTemplates.insert
-            (
-                fieldName,
-                autoPtr<volSymmTensorField>
+            autoPtr<volSymmTensorField> tmpl;
+
+            fileName field0Path = runTime.path()/"0"/fieldName;
+
+            if (isFile(field0Path))
+            {
+                Info<< "Reading existing 0/" << fieldName << nl;
+
+                tmpl.reset
                 (
                     new volSymmTensorField
                     (
-                        IOobject(fieldName, "0", mesh, IOobject::MUST_READ, IOobject::NO_WRITE, IOobject::NO_REGISTER),
+                        IOobject
+                        (
+                            fieldName,
+                            "0",
+                            mesh,
+                            IOobject::MUST_READ,
+                            IOobject::NO_WRITE,
+                            IOobject::NO_REGISTER
+                        ),
                         mesh
                     )
-                )
-            );
+                );
+            }
+            else
+            {
+                Info<< "Creating symmTensor field " << fieldName << " (no 0/ file)" << nl;
+
+                tmpl.reset
+                (
+                    new volSymmTensorField
+                    (
+                        IOobject
+                        (
+                            fieldName,
+                            runTime.timeName(),
+                            mesh,
+                            IOobject::NO_READ,
+                            IOobject::NO_WRITE,
+                            IOobject::NO_REGISTER
+                        ),
+                        mesh,
+                        dimensionedSymmTensor(fieldName, dimless, symmTensor::zero)
+                    )
+                );
+            }
+
+            symmTensorTemplates.insert(fieldName, tmpl);
 
             symmTensorFields.insert
             (
@@ -226,21 +373,99 @@ int main(int argc, char *argv[])
                 (
                     new volSymmTensorField
                     (
-                        IOobject(fieldName, runTime.timeName(), mesh, IOobject::NO_READ, IOobject::NO_WRITE, IOobject::REGISTER),
+                        IOobject
+                        (
+                            fieldName,
+                            runTime.timeName(),
+                            mesh,
+                            IOobject::NO_READ,
+                            IOobject::NO_WRITE,
+                            IOobject::REGISTER
+                        ),
                         symmTensorTemplates[fieldName]()
                     )
                 )
             );
+        }    
+        else if (meta.shape.size() == 3 && meta.shape[1] == 9)
+        {
+            autoPtr<volTensorField> tmpl;
+
+            fileName field0Path = runTime.path()/"0"/fieldName;
+
+            if (isFile(field0Path))
+            {
+                Info<< "Reading existing 0/" << fieldName << nl;
+
+                tmpl.reset
+                (
+                    new volTensorField
+                    (
+                        IOobject
+                        (
+                            fieldName,
+                            "0",
+                            mesh,
+                            IOobject::MUST_READ,
+                            IOobject::NO_WRITE,
+                            IOobject::NO_REGISTER
+                        ),
+                        mesh
+                    )
+                );
+            }
+            else
+            {
+                Info<< "Creating tensor field " << fieldName << " (no 0/ file)" << nl;
+
+                tmpl.reset
+                (
+                    new volTensorField
+                    (
+                        IOobject
+                        (
+                            fieldName,
+                            runTime.timeName(),
+                            mesh,
+                            IOobject::NO_READ,
+                            IOobject::NO_WRITE,
+                            IOobject::NO_REGISTER
+                        ),
+                        mesh,
+                        dimensionedTensor(fieldName, dimless, tensor::zero)
+                    )
+                );
+            }
+
+            tensorTemplates.insert(fieldName, tmpl);
+
+            tensorFields.insert
+            (
+                fieldName,
+                autoPtr<volTensorField>
+                (
+                    new volTensorField
+                    (
+                        IOobject
+                        (
+                            fieldName,
+                            runTime.timeName(),
+                            mesh,
+                            IOobject::NO_READ,
+                            IOobject::NO_WRITE,
+                            IOobject::REGISTER
+                        ),
+                        tensorTemplates[fieldName]()
+                    )
+                )
+            );
         }
+
+
     }
+    Info<< nl;
 
     autoPtr<functionObjectList> functionsPtr;
-
-    if (is_postProcess)
-    {
-        functionsPtr.reset(new functionObjectList(runTime, true));
-        functionsPtr->start();
-    }
 
     forAll(timeValues, timeIndex)
 
@@ -267,7 +492,7 @@ int main(int argc, char *argv[])
                 if (is_write) scalar_.write();                    
             }
 
-            else if (meta.shape.size() == 3)
+            else if (meta.shape.size() == 3 && meta.shape[1] == 3)
             {
                 vectorField snapshot;
                 readVectorSnapshot(meta, timeIndex, snapshot);
@@ -282,7 +507,7 @@ int main(int argc, char *argv[])
 
             }
 
-            else if (meta.shape.size() == 4)
+            else if (meta.shape.size() == 3 && meta.shape[1] == 6)
             {
                 symmTensorField snapshot;
                 readSymmTensorSnapshot(meta, timeIndex, snapshot);
@@ -294,26 +519,39 @@ int main(int argc, char *argv[])
                 tensor_.correctBoundaryConditions();
                 if (is_write) tensor_.write();                    
 
-                }
-                else
+            }
+
+            else if (meta.shape.size() == 3 && meta.shape[1] == 9)
+            {
+                tensorField snapshot;
+                readTensorSnapshot(meta, timeIndex, snapshot);
+                volTensorField& tensor_ = tensorFields[fieldName]();
+
+                forAll(tensor_.internalFieldRef(), cellI)
                 {
-                    FatalErrorInFunction
-                        << "Unsupported dims " << meta.shape.size()
-                        << " for " << meta.file << exit(FatalError);
+                    tensor_.internalFieldRef()[cellI] = snapshot[cellI];
                 }
 
-        }
+                tensor_.correctBoundaryConditions();
+                if (is_write) tensor_.write();
+            }
+                        
+            else
+            {
+                FatalErrorInFunction
+                    << "Unsupported dims " << meta.shape.size()
+                    << " for " << meta.file << exit(FatalError);
+            }
 
-        if (is_postProcess)
-        {
-            functionsPtr->execute();
         }
-        
-    }
-    if (is_postProcess)
+    if (Pstream::master())
     {
-        functionsPtr->end();
-    }
+        Info<< "Finished writing fields for time = "
+            << runTime.timeName() << endl;
+    }    
+    
+
+}
 
     return 0;
 }
