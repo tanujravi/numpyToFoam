@@ -1,4 +1,0 @@
-SOURCE = \
-foamToNumpy.C \
-
-# sources

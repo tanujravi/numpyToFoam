@@ -89,7 +89,20 @@ int main(int argc, char *argv[])
         
     const IOdictionary dict(DictIO);
 
-    wordList fields(dict.get<wordList>("fields"));
+    wordList fields;
+
+    word dataTypeWord_field = "float64";
+    npyType dtype_field = parseNpyType(dataTypeWord_field);
+    
+    if (dict.found("fields"))
+    {
+        const dictionary& fieldDict = dict.subDict("fields");
+        fields = fieldDict.get<wordList>("fields");
+        dataTypeWord_field = fieldDict.getOrDefault<word>("dataType", "float64");
+        dtype_field = parseNpyType(dataTypeWord_field);
+    }
+
+
     const dictionary& timeDict = dict.subDict("time");
     const scalar t_start = timeDict.get<scalar>("startTime");
     const scalar t_end   = timeDict.get<scalar>("endTime");
@@ -98,6 +111,9 @@ int main(int argc, char *argv[])
     bool writeCellCentre = false;
     bool writeCellVolumes = false;
     bool writeWriteTimes = false;
+    word dataTypeWord_export = "float64";
+
+    npyType dtype_export = parseNpyType(dataTypeWord_export);
 
     if (dict.found("exportData"))
     {
@@ -105,9 +121,9 @@ int main(int argc, char *argv[])
         writeCellCentre = exportDict.getOrDefault<bool>("cellCentre", false);
         writeCellVolumes = exportDict.getOrDefault<bool>("cellVolumes", false);
         writeWriteTimes = exportDict.getOrDefault<bool>("writeTimes", false);
+        dataTypeWord_export = exportDict.getOrDefault<word>("dataType", "float64");
+        dtype_export = parseNpyType(dataTypeWord_export);
     }
-    const word dataTypeWord = dict.getOrDefault<word>("dataType", "float64");
-    const npyType dtype = parseNpyType(dataTypeWord);
 
     const word storageOrderWord = dict.getOrDefault<word>("storageOrder", "C");
     const bool fortranOrder = parseFortranOrder(storageOrderWord);
@@ -255,6 +271,8 @@ int main(int argc, char *argv[])
     // ------------------------------------------------------------
     // write phase
     // ------------------------------------------------------------
+
+    // actual per-field write loop
     forAll(metadata, i)
     {
         const fieldMeta& meta = metadata[i];
@@ -266,31 +284,11 @@ int main(int argc, char *argv[])
 
         if (meta.kind == fieldKind::SCALAR)
         {
-            npyWriter<volScalarField>
-            (
-                meta,
-                shape,
-                dtype,
-                fortranOrder,
-                selectedTimes.size()
-            ).flush();
-        }
-    }
-
-    // actual per-field write loop
-    forAll(metadata, i)
-    {
-        const fieldMeta& meta = metadata[i];
-        const std::vector<std::size_t> shape =
-            makeShape(selectedTimes.size(), meta.nCells, meta.nComp);
-
-        if (meta.kind == fieldKind::SCALAR)
-        {
             npyWriter<volScalarField> writer
             (
                 meta,
                 shape,
-                dtype,
+                dtype_field,
                 fortranOrder,
                 selectedTimes.size()
             );
@@ -321,7 +319,7 @@ int main(int argc, char *argv[])
             (
                 meta,
                 shape,
-                dtype,
+                dtype_field,
                 fortranOrder,
                 selectedTimes.size()
             );
@@ -352,7 +350,7 @@ int main(int argc, char *argv[])
             (
                 meta,
                 shape,
-                dtype,
+                dtype_field,
                 fortranOrder,
                 selectedTimes.size()
             );
@@ -383,7 +381,7 @@ int main(int argc, char *argv[])
             (
                 meta,
                 shape,
-                dtype,
+                dtype_field,
                 fortranOrder,
                 selectedTimes.size()
             );
@@ -412,29 +410,11 @@ int main(int argc, char *argv[])
 
     if (writeWriteTimes && Pstream::master())
     {
-        label nTimesNoConstant = 0;
+        scalarField timesFld(selectedTimes.size());
 
-        forAll(allTimes, i)
+        forAll(selectedTimes, i)
         {
-            if (allTimes[i].name() != runTime.constant())
-            {
-                ++nTimesNoConstant;
-            }
-        }
-
-        scalarField timesFld(nTimesNoConstant);
-
-        label k = 0;
-        forAll(allTimes, i)
-        {
-            const instant& t = allTimes[i];
-
-            if (t.name() == runTime.constant())
-            {
-                continue;
-            }
-
-            timesFld[k++] = t.value();
+            timesFld[i] = selectedTimes[i].value();
         }
 
         fieldMeta timesMeta;
@@ -452,7 +432,7 @@ int main(int argc, char *argv[])
         (
             timesMeta,
             timesShape,
-            dtype,
+            dtype_export,
             fortranOrder,
             1
         );
@@ -460,6 +440,7 @@ int main(int argc, char *argv[])
         timesWriter.write(timesFld, 0);
         timesWriter.flush();
     }
+    
     if (writeCellCentre)
     {
         const volVectorField& C = mesh.C();
@@ -480,7 +461,7 @@ int main(int argc, char *argv[])
         (
             centreMeta,
             shape,
-            dtype,
+            dtype_export,
             fortranOrder,
             1
         );
@@ -509,7 +490,7 @@ int main(int argc, char *argv[])
         (
             volMeta,
             shape,
-            dtype,
+            dtype_export,
             fortranOrder,
             1
         );
