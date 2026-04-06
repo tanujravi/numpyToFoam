@@ -187,13 +187,26 @@ int main(int argc, char *argv[])
 
     runTime.setTime(selectedTimes[0], 0);
     
-    List<fieldMeta> metadata(fields.size());
-
+    //List<fieldMeta> metadata(fields.size());
+    DynamicList<fieldMeta> metadata;
+    
     Info<< "Inspecting fields at initial selected time "
         << runTime.timeName() << nl;
     forAll(fields, i)
     {
         const word& fieldName = fields[i];
+        const fileName fieldDir = dataDir/fieldName;
+
+        if (isDir(fieldDir))
+        {
+            WarningInFunction
+                << "Output directory already exists for field '" << fieldName << "'"
+                << nl << "Skipping field." << nl
+                << "Directory: " << fieldDir << nl;
+            continue;
+        }
+    
+        mkDir(fieldDir);
 
         IOobject io
         (
@@ -214,34 +227,35 @@ int main(int argc, char *argv[])
         }
 
         const word cls = io.headerClassName();
+        
+        fieldMeta meta;
+        meta.name = fieldName;
+        meta.className = cls;
+        meta.kind = classifyField(cls);
 
-        metadata[i].name = fieldName;
-        metadata[i].className = cls;
-        metadata[i].kind = classifyField(cls);
-
-        if (metadata[i].kind == fieldKind::SCALAR)
+        if (meta.kind == fieldKind::SCALAR)
         {
             volScalarField fld(io, mesh);
-            metadata[i].nCells = fld.size();
-            metadata[i].nComp = 1;
+            meta.nCells = fld.size();
+            meta.nComp = 1;
         }
-        else if (metadata[i].kind == fieldKind::VECTOR)
+        else if (meta.kind == fieldKind::VECTOR)
         {
             volVectorField fld(io, mesh);
-            metadata[i].nCells = fld.size();
-            metadata[i].nComp = 3;
+            meta.nCells = fld.size();
+            meta.nComp = 3;
         }
-        else if (metadata[i].kind == fieldKind::SYMM_TENSOR)
+        else if (meta.kind == fieldKind::SYMM_TENSOR)
         {
             volSymmTensorField fld(io, mesh);
-            metadata[i].nCells = fld.size();
-            metadata[i].nComp = 6;
+            meta.nCells = fld.size();
+            meta.nComp = 6;
         }
-        else if (metadata[i].kind == fieldKind::TENSOR)
+        else if (meta.kind == fieldKind::TENSOR)
         {
             volTensorField fld(io, mesh);
-            metadata[i].nCells = fld.size();
-            metadata[i].nComp = 9;
+            meta.nCells = fld.size();
+            meta.nComp = 9;
         }
         else
         {
@@ -251,20 +265,23 @@ int main(int argc, char *argv[])
                 << exit(FatalError);
         }
 
-        metadata[i].outFile =
-            dataDir/
+
+        meta.outFile =
+            fieldDir/
             (
                 fieldName
               + "_proc_"
               + Foam::name(Pstream::myProcNo())
               + ".npy"
             );
+        
+        metadata.append(meta);
 
-        Info<< "Field " << metadata[i].name
-            << " : class=" << metadata[i].className
-            << ", nCells=" << metadata[i].nCells
-            << ", nComp=" << metadata[i].nComp
-            << ", outFile=" << metadata[i].outFile
+        Info<< "Field " << meta.name
+            << " : class=" << meta.className
+            << ", nCells=" << meta.nCells
+            << ", nComp=" << meta.nComp
+            << ", outFile=" << meta.outFile
             << nl;
     }
 
@@ -410,96 +427,148 @@ int main(int argc, char *argv[])
 
     if (writeWriteTimes && Pstream::master())
     {
-        scalarField timesFld(selectedTimes.size());
-
-        forAll(selectedTimes, i)
+        const fileName timesDir = dataDir/"times";
+        
+        if (isDir(timesDir))
         {
-            timesFld[i] = selectedTimes[i].value();
+            WarningInFunction
+                << "Output directory already exists for times export." << nl
+                << "Skipping times export." << nl
+                << "Directory: " << timesDir << nl;
+        }        
+        
+        else
+        {
+            
+            mkDir(timesDir);                                                                                                                
+            
+            scalarField timesFld(selectedTimes.size());
+
+            forAll(selectedTimes, i)
+            {
+                timesFld[i] = selectedTimes[i].value();
+            }
+
+            fieldMeta timesMeta;
+            timesMeta.name = "times";
+            timesMeta.className = "scalarField";
+            timesMeta.kind = fieldKind::SCALAR;
+            timesMeta.nCells = timesFld.size();
+            timesMeta.nComp = 1;
+            timesMeta.outFile = timesDir/"times.npy";
+
+            const std::vector<std::size_t> timesShape =
+                makeShape(1, timesMeta.nCells, timesMeta.nComp);
+
+            npyWriter<scalarField> timesWriter
+            (
+                timesMeta,
+                timesShape,
+                dtype_export,
+                fortranOrder,
+                1
+            );
+
+            timesWriter.write(timesFld, 0);
+            timesWriter.flush();
         }
-
-        fieldMeta timesMeta;
-        timesMeta.name = "times";
-        timesMeta.className = "scalarField";
-        timesMeta.kind = fieldKind::SCALAR;
-        timesMeta.nCells = timesFld.size();
-        timesMeta.nComp = 1;
-        timesMeta.outFile = dataDir/"times.npy";
-
-        const std::vector<std::size_t> timesShape =
-            makeShape(1, timesMeta.nCells, timesMeta.nComp);
-
-        npyWriter<scalarField> timesWriter
-        (
-            timesMeta,
-            timesShape,
-            dtype_export,
-            fortranOrder,
-            1
-        );
-
-        timesWriter.write(timesFld, 0);
-        timesWriter.flush();
     }
-    
+
     if (writeCellCentre)
     {
-        const volVectorField& C = mesh.C();
+        const fileName centreDir = dataDir/"cellCentre";
 
-        fieldMeta centreMeta;
-        centreMeta.name = "cellCentre";
-        centreMeta.className = volVectorField::typeName;
-        centreMeta.kind = fieldKind::VECTOR;
-        centreMeta.nCells = C.size();
-        centreMeta.nComp = 3;
-        centreMeta.outFile =
-            dataDir/("cellCentre_proc_" + Foam::name(Pstream::myProcNo()) + ".npy");
+        if (isDir(centreDir))
+        {
+            WarningInFunction
+                << "Output directory already exists for cellCentre export." << nl
+                << "Skipping cellCentre export." << nl
+                << "Directory: " << centreDir << nl;
+        }
+        else
+        {
+            mkDir(centreDir);
 
-        const std::vector<std::size_t> shape =
-            makeShape(1, centreMeta.nCells, centreMeta.nComp);
+            const volVectorField& C = mesh.C();
 
-        npyWriter<volVectorField> writer
-        (
-            centreMeta,
-            shape,
-            dtype_export,
-            fortranOrder,
-            1
-        );
+            fieldMeta centreMeta;
+            centreMeta.name = "cellCentre";
+            centreMeta.className = volVectorField::typeName;
+            centreMeta.kind = fieldKind::VECTOR;
+            centreMeta.nCells = C.size();
+            centreMeta.nComp = 3;
+            centreMeta.outFile =
+                centreDir/
+                (
+                    "cellCentre_proc_"
+                + Foam::name(Pstream::myProcNo())
+                + ".npy"
+                );
 
-        writer.write(C, 0);
-        writer.flush();
+            const std::vector<std::size_t> shape =
+                makeShape(1, centreMeta.nCells, centreMeta.nComp);
+
+            npyWriter<volVectorField> writer
+            (
+                centreMeta,
+                shape,
+                dtype_export,
+                fortranOrder,
+                1
+            );
+
+            writer.write(C, 0);
+            writer.flush();
+        }
     }
 
     if (writeCellVolumes)
     {
-        const scalarField& V = mesh.V();
+        const fileName volDir = dataDir/"cellVolumes";
 
-        fieldMeta volMeta;
-        volMeta.name = "cellVolumes";
-        volMeta.className = "scalarField";
-        volMeta.kind = fieldKind::SCALAR;
-        volMeta.nCells = V.size();
-        volMeta.nComp = 1;
-        volMeta.outFile =
-            dataDir/("cellVolumes_proc_" + Foam::name(Pstream::myProcNo()) + ".npy");
+        if (isDir(volDir))
+        {
+            WarningInFunction
+                << "Output directory already exists for cellVolumes export." << nl
+                << "Skipping cellVolumes export." << nl
+                << "Directory: " << volDir << nl;
+        }
+        else
+        {
+            mkDir(volDir);
 
-        const std::vector<std::size_t> shape =
-            makeShape(1, volMeta.nCells, volMeta.nComp);
+            const scalarField& V = mesh.V();
 
-        npyWriter<scalarField> writer
-        (
-            volMeta,
-            shape,
-            dtype_export,
-            fortranOrder,
-            1
-        );
+            fieldMeta volMeta;
+            volMeta.name = "cellVolumes";
+            volMeta.className = "scalarField";
+            volMeta.kind = fieldKind::SCALAR;
+            volMeta.nCells = V.size();
+            volMeta.nComp = 1;
+            volMeta.outFile =
+                volDir/
+                (
+                    "cellVolumes_proc_"
+                + Foam::name(Pstream::myProcNo())
+                + ".npy"
+                );
 
-        writer.write(V, 0);
-        writer.flush();
+            const std::vector<std::size_t> shape =
+                makeShape(1, volMeta.nCells, volMeta.nComp);
+
+            npyWriter<scalarField> writer
+            (
+                volMeta,
+                shape,
+                dtype_export,
+                fortranOrder,
+                1
+            );
+
+            writer.write(V, 0);
+            writer.flush();
+        }
     }
-
-    return 0;
 }
 
-// ************************************************************************* //
+    // ************************************************************************* //
