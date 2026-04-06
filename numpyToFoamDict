@@ -12,9 +12,8 @@ FoamFile
     object      numpyToFoamDict;
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
-dataDir       "data";
+dataDir       data;
 fields        (p U UPrime2Mean);
-write         true;                                                                                                                          ;
 time          
 {
     startTime     8.0;

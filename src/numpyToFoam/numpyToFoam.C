@@ -40,32 +40,58 @@ Description
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 int main(int argc, char *argv[])
 {
+
+    argList::addOption("dict", "file", "Alternative numpyToFoamDict");
     #include "setRootCase.H"
     #include "createTime.H"
     #include "createMesh.H"
-    #include "functionObjectList.H"
     // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
     Info<< nl;
     runTime.printExecutionTime(Info);
+    const word dictName("numpyToFoamDict");
+
+    fileName dictPath;
+
+    if (args.readIfPresent("dict", dictPath))
+    {
+        // Dictionary specified on the command-line ...
+ 
+        if (isDir(dictPath))
+        {
+            dictPath /= dictName;
+        }
+    }
+    else
+    {
+        // Assume dictionary is to be found in the system directory
+ 
+        dictPath = runTime.system()/dictName;
+    }
+
     
-    const IOdictionary dict
+    IOobject DictIO
     (
-        IOobject::selectIO
-        (
-            IOobject
-            (
-                "numpyToFoamDict",
-                runTime.system(),
-                runTime,
-                IOobject::MUST_READ_IF_MODIFIED,
-                IOobject::NO_WRITE
-            ),
-            args.getOrDefault<fileName>("dict", "")
-        )
+        dictPath,
+        runTime,
+        IOobject::MUST_READ,
+        IOobject::NO_WRITE,
+        IOobject::NO_REGISTER
     );
 
-    const bool is_write(dict.get<bool>("write"));
+    if (!DictIO.typeHeaderOk<IOdictionary>(true))
+    {
+        FatalErrorInFunction
+            << DictIO.objectPath() << nl
+            << exit(FatalError);
+    }
+
+    Info<< "Reading numpyToFoam settings from "
+        << DictIO.objectRelPath() << endl;
+        
+        
+    const IOdictionary dict(DictIO);
+    
     wordList fields(dict.get<wordList>("fields"));
     const dictionary& timeDict = dict.subDict("time");
     const scalar t_start = timeDict.get<scalar>("startTime");
@@ -107,7 +133,7 @@ int main(int argc, char *argv[])
         word fieldName = fields[fieldInd];
         word fname = fieldName + "_proc_" + Foam::name(procNo) + ".npy";
 
-        fileName fullPath = dataDir/fname;
+        fileName fullPath = dataDir/fieldName/fname;
 
         if (!isFile(fullPath))
         {
@@ -133,13 +159,15 @@ int main(int argc, char *argv[])
             << " | Loaded file: " << meta.file
             << " | Shape: (";
         
-        forAll(meta.shape, d)
+        for (std::size_t d = 0; d < meta.shape.size(); ++d)
         {
-            Info<< meta.shape[d];
-            if (d != meta.shape.size()-1)
-                Info<< " x ";
+            Info << meta.shape[d];
+            if (d + 1 < meta.shape.size())
+            {
+                Info << " x ";
+            }
         }
-
+        
         Info<< ")"
             << " | Type: " << (meta.is_f8 ? "float64" : "float32")
             << nl;
@@ -489,7 +517,7 @@ int main(int argc, char *argv[])
                     scalar_.internalFieldRef()[cellI] = snapshot[cellI]; 
                 }
                 scalar_.correctBoundaryConditions();
-                if (is_write) scalar_.write();                    
+                scalar_.write();                    
             }
 
             else if (meta.shape.size() == 3 && meta.shape[1] == 3)
@@ -503,7 +531,7 @@ int main(int argc, char *argv[])
                     vector_.internalFieldRef()[cellI] = snapshot[cellI]; 
                 }
                 vector_.correctBoundaryConditions();
-                if (is_write) vector_.write();
+                vector_.write();
 
             }
 
@@ -511,13 +539,13 @@ int main(int argc, char *argv[])
             {
                 symmTensorField snapshot;
                 readSymmTensorSnapshot(meta, timeIndex, snapshot);
-                volSymmTensorField& tensor_ = symmTensorFields[fieldName]();
-                forAll (tensor_.internalFieldRef(), cellI) 
+                volSymmTensorField& symmtensor_ = symmTensorFields[fieldName]();
+                forAll (symmtensor_.internalFieldRef(), cellI) 
                 { 
-                    tensor_.internalFieldRef()[cellI] = snapshot[cellI]; 
+                    symmtensor_.internalFieldRef()[cellI] = snapshot[cellI]; 
                 }
-                tensor_.correctBoundaryConditions();
-                if (is_write) tensor_.write();                    
+                symmtensor_.correctBoundaryConditions();
+                symmtensor_.write();                    
 
             }
 
@@ -533,7 +561,7 @@ int main(int argc, char *argv[])
                 }
 
                 tensor_.correctBoundaryConditions();
-                if (is_write) tensor_.write();
+                tensor_.write();
             }
                         
             else

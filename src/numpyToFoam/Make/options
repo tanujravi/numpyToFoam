@@ -5,6 +5,4 @@ EXE_INC = \
 EXE_LIBS = \
     -lfiniteVolume \
     -lmeshTools \
-    -lforces \
-    -lfieldFunctionObjects \
     -lz 
