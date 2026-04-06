@@ -97,7 +97,7 @@ int main(int argc, char *argv[])
     if (dict.found("fields"))
     {
         const dictionary& fieldDict = dict.subDict("fields");
-        fields = fieldDict.get<wordList>("fields");
+        fields = fieldDict.get<wordList>("names");
         dataTypeWord_field = fieldDict.getOrDefault<word>("dataType", "float64");
         dtype_field = parseNpyType(dataTypeWord_field);
     }
@@ -141,7 +141,11 @@ int main(int argc, char *argv[])
         dataDir = rootCaseDir/dataSubDir;
     }
 
-    mkDir(dataDir);
+    if (Pstream::master() && !isDir(dataDir))
+    {
+        mkDir(dataDir);
+    }
+    Pstream::barrier(UPstream::worldComm);
 
     instantList allTimes = runTime.times();
     instantList selectedTimes;
@@ -197,16 +201,29 @@ int main(int argc, char *argv[])
         const word& fieldName = fields[i];
         const fileName fieldDir = dataDir/fieldName;
 
-        if (isDir(fieldDir))
+        bool skipField = false;
+        if (Pstream::master())
         {
-            WarningInFunction
-                << "Output directory already exists for field '" << fieldName << "'"
-                << nl << "Skipping field." << nl
-                << "Directory: " << fieldDir << nl;
+            if (isDir(fieldDir))
+            {
+                WarningInFunction
+                    << "Output directory already exists for field '" << fieldName << "'"
+                    << nl << "Skipping field." << nl
+                    << "Directory: " << fieldDir << nl;
+                skipField = true;
+            }
+            else
+            {
+                mkDir(fieldDir);
+            }
+        }
+        Pstream::broadcast(skipField);
+        Pstream::barrier(UPstream::worldComm);
+        
+        if (skipField)
+        {
             continue;
         }
-    
-        mkDir(fieldDir);
 
         IOobject io
         (
@@ -281,7 +298,6 @@ int main(int argc, char *argv[])
             << " : class=" << meta.className
             << ", nCells=" << meta.nCells
             << ", nComp=" << meta.nComp
-            << ", outFile=" << meta.outFile
             << nl;
     }
 
@@ -296,8 +312,15 @@ int main(int argc, char *argv[])
         const std::vector<std::size_t> shape =
             makeShape(selectedTimes.size(), meta.nCells, meta.nComp);
 
+        const fileName fieldPattern =
+            (dataDir/meta.name)/
+            (
+                meta.name
+            + "_proc_*.npy"
+            );
+
         Info<< "Writing field " << meta.name
-            << " to " << meta.outFile << nl;
+            << " to " << fieldPattern << nl;            
 
         if (meta.kind == fieldKind::SCALAR)
         {
@@ -428,6 +451,7 @@ int main(int argc, char *argv[])
     if (writeWriteTimes && Pstream::master())
     {
         const fileName timesDir = dataDir/"times";
+
         
         if (isDir(timesDir))
         {
@@ -456,6 +480,8 @@ int main(int argc, char *argv[])
             timesMeta.nCells = timesFld.size();
             timesMeta.nComp = 1;
             timesMeta.outFile = timesDir/"times.npy";
+            Info<< "Writing " << timesMeta.name
+                << " to " << timesMeta.outFile << nl;
 
             const std::vector<std::size_t> timesShape =
                 makeShape(1, timesMeta.nCells, timesMeta.nComp);
@@ -477,18 +503,29 @@ int main(int argc, char *argv[])
     if (writeCellCentre)
     {
         const fileName centreDir = dataDir/"cellCentre";
+        bool skipCellCentre = false;
 
-        if (isDir(centreDir))
+        if (Pstream::master())
         {
-            WarningInFunction
-                << "Output directory already exists for cellCentre export." << nl
-                << "Skipping cellCentre export." << nl
-                << "Directory: " << centreDir << nl;
+            if (isDir(centreDir))
+            {
+                WarningInFunction
+                    << "Output directory already exists for cellCentre export." << nl
+                    << "Skipping cellCentre export." << nl
+                    << "Directory: " << centreDir << nl;
+                skipCellCentre = true;
+            }
+            else
+            {
+                mkDir(centreDir);
+            }
         }
-        else
-        {
-            mkDir(centreDir);
 
+        Pstream::broadcast(skipCellCentre);
+        Pstream::barrier(UPstream::worldComm);
+
+        if (!skipCellCentre)
+        {
             const volVectorField& C = mesh.C();
 
             fieldMeta centreMeta;
@@ -504,6 +541,17 @@ int main(int argc, char *argv[])
                 + Foam::name(Pstream::myProcNo())
                 + ".npy"
                 );
+                
+            const fileName fieldPattern =
+                (dataDir/centreMeta.name)/
+                (
+                    centreMeta.name
+                + "_proc_*.npy"
+                );
+
+            Info<< "Writing field " << centreMeta.name
+                << " to " << fieldPattern << nl;
+
 
             const std::vector<std::size_t> shape =
                 makeShape(1, centreMeta.nCells, centreMeta.nComp);
@@ -525,18 +573,29 @@ int main(int argc, char *argv[])
     if (writeCellVolumes)
     {
         const fileName volDir = dataDir/"cellVolumes";
+        bool skipCellVolumes = false;
 
-        if (isDir(volDir))
+        if (Pstream::master())
         {
-            WarningInFunction
-                << "Output directory already exists for cellVolumes export." << nl
-                << "Skipping cellVolumes export." << nl
-                << "Directory: " << volDir << nl;
+            if (isDir(volDir))
+            {
+                WarningInFunction
+                    << "Output directory already exists for cellVolumes export." << nl
+                    << "Skipping cellVolumes export." << nl
+                    << "Directory: " << volDir << nl;
+                skipCellVolumes = true;
+            }
+            else
+            {
+                mkDir(volDir);
+            }
         }
-        else
-        {
-            mkDir(volDir);
 
+        Pstream::broadcast(skipCellVolumes);
+        Pstream::barrier(UPstream::worldComm);
+
+        if (!skipCellVolumes)
+        {
             const scalarField& V = mesh.V();
 
             fieldMeta volMeta;
@@ -552,6 +611,17 @@ int main(int argc, char *argv[])
                 + Foam::name(Pstream::myProcNo())
                 + ".npy"
                 );
+
+            const fileName fieldPattern =
+                (dataDir/volMeta.name)/
+                (
+                    volMeta.name
+                + "_proc_*.npy"
+                );
+
+            Info<< "Writing field " << volMeta.name
+                << " to " << fieldPattern << nl;
+
 
             const std::vector<std::size_t> shape =
                 makeShape(1, volMeta.nCells, volMeta.nComp);
@@ -570,5 +640,4 @@ int main(int argc, char *argv[])
         }
     }
 }
-
     // ************************************************************************* //
