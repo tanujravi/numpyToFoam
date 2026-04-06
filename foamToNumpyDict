@@ -13,20 +13,26 @@ FoamFile
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 dataDir       data;
-fields        (p U UPrime2Mean);
+fields
+{ 
+    names       (p U);
+    dataType    float64;
+}
 exportData
 {
-    cellCentre   false;
-    cellVolumes  false;
-    writeTimes   false;
+    cellCentre   true;
+    cellVolumes  true;
+    writeTimes   true;
+    dataType     float64;
 }
-dataType    float32;
+storageOrder   F;         // F or C
 time          
 {
-    startTime     8.0;
-    endTime       12.0;
+    startTime     0.0;
+    endTime       0.5;
     every         1;
 }
+
 
 
 
