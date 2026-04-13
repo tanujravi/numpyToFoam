@@ -76,7 +76,7 @@ int main(int argc, char *argv[])
         runTime,
         IOobject::MUST_READ,
         IOobject::NO_WRITE,
-        IOobject::NO_REGISTER
+        false
     );
 
     if (!DictIO.typeHeaderOk<IOdictionary>(true))
@@ -223,7 +223,7 @@ int main(int argc, char *argv[])
                             mesh,
                             IOobject::MUST_READ,
                             IOobject::NO_WRITE,
-                            IOobject::NO_REGISTER
+                            false
                         ),
                         mesh
                     )
@@ -244,7 +244,7 @@ int main(int argc, char *argv[])
                             mesh,
                             IOobject::NO_READ,
                             IOobject::NO_WRITE,
-                            IOobject::NO_REGISTER
+                            false
                         ),
                         mesh,
                         dimensionedScalar(fieldName, dimless, 0.0)
@@ -261,7 +261,7 @@ int main(int argc, char *argv[])
                 (
                     new volScalarField
                     (
-                        IOobject(fieldName, runTime.timeName(), mesh, IOobject::NO_READ, IOobject::NO_WRITE, IOobject::REGISTER),
+                        IOobject(fieldName, runTime.timeName(), mesh, IOobject::NO_READ, IOobject::NO_WRITE, true),
                         scalarTemplates[fieldName]()
                     )
                 )
@@ -289,7 +289,7 @@ int main(int argc, char *argv[])
                             mesh,
                             IOobject::MUST_READ,
                             IOobject::NO_WRITE,
-                            IOobject::NO_REGISTER
+                            false
                         ),
                         mesh
                     )
@@ -310,7 +310,7 @@ int main(int argc, char *argv[])
                             mesh,
                             IOobject::NO_READ,
                             IOobject::NO_WRITE,
-                            IOobject::NO_REGISTER
+                            false
                         ),
                         mesh,
                         dimensionedVector(fieldName, dimless, vector::zero)
@@ -334,7 +334,7 @@ int main(int argc, char *argv[])
                             mesh,
                             IOobject::NO_READ,
                             IOobject::NO_WRITE,
-                            IOobject::REGISTER
+                            true
                         ),
                         vectorTemplates[fieldName]()
                     )
@@ -363,7 +363,7 @@ int main(int argc, char *argv[])
                             mesh,
                             IOobject::MUST_READ,
                             IOobject::NO_WRITE,
-                            IOobject::NO_REGISTER
+                            false
                         ),
                         mesh
                     )
@@ -384,7 +384,7 @@ int main(int argc, char *argv[])
                             mesh,
                             IOobject::NO_READ,
                             IOobject::NO_WRITE,
-                            IOobject::NO_REGISTER
+                            false
                         ),
                         mesh,
                         dimensionedSymmTensor(fieldName, dimless, symmTensor::zero)
@@ -408,7 +408,7 @@ int main(int argc, char *argv[])
                             mesh,
                             IOobject::NO_READ,
                             IOobject::NO_WRITE,
-                            IOobject::REGISTER
+                            true
                         ),
                         symmTensorTemplates[fieldName]()
                     )
@@ -436,7 +436,7 @@ int main(int argc, char *argv[])
                             mesh,
                             IOobject::MUST_READ,
                             IOobject::NO_WRITE,
-                            IOobject::NO_REGISTER
+                            false
                         ),
                         mesh
                     )
@@ -457,7 +457,7 @@ int main(int argc, char *argv[])
                             mesh,
                             IOobject::NO_READ,
                             IOobject::NO_WRITE,
-                            IOobject::NO_REGISTER
+                            false
                         ),
                         mesh,
                         dimensionedTensor(fieldName, dimless, tensor::zero)
@@ -481,7 +481,7 @@ int main(int argc, char *argv[])
                             mesh,
                             IOobject::NO_READ,
                             IOobject::NO_WRITE,
-                            IOobject::REGISTER
+                            true
                         ),
                         tensorTemplates[fieldName]()
                     )
@@ -512,9 +512,9 @@ int main(int argc, char *argv[])
                 readScalarSnapshot(meta, timeIndex, snapshot);
                 volScalarField& scalar_ = scalarFields[fieldName]();
 
-                forAll (scalar_.internalFieldRef(), cellI) 
+                forAll (scalar_.primitiveFieldRef(), cellI) 
                 { 
-                    scalar_.internalFieldRef()[cellI] = snapshot[cellI]; 
+                    scalar_.primitiveFieldRef()[cellI] = snapshot[cellI]; 
                 }
                 scalar_.correctBoundaryConditions();
                 scalar_.write();                    
@@ -526,9 +526,9 @@ int main(int argc, char *argv[])
                 readVectorSnapshot(meta, timeIndex, snapshot);
                 volVectorField& vector_ = vectorFields[fieldName]();
 
-                forAll (vector_.internalFieldRef(), cellI) 
+                forAll (vector_.primitiveFieldRef(), cellI) 
                 { 
-                    vector_.internalFieldRef()[cellI] = snapshot[cellI]; 
+                    vector_.primitiveFieldRef()[cellI] = snapshot[cellI]; 
                 }
                 vector_.correctBoundaryConditions();
                 vector_.write();
@@ -540,9 +540,9 @@ int main(int argc, char *argv[])
                 symmTensorField snapshot;
                 readSymmTensorSnapshot(meta, timeIndex, snapshot);
                 volSymmTensorField& symmtensor_ = symmTensorFields[fieldName]();
-                forAll (symmtensor_.internalFieldRef(), cellI) 
+                forAll (symmtensor_.primitiveFieldRef(), cellI) 
                 { 
-                    symmtensor_.internalFieldRef()[cellI] = snapshot[cellI]; 
+                    symmtensor_.primitiveFieldRef()[cellI] = snapshot[cellI]; 
                 }
                 symmtensor_.correctBoundaryConditions();
                 symmtensor_.write();                    
@@ -555,9 +555,9 @@ int main(int argc, char *argv[])
                 readTensorSnapshot(meta, timeIndex, snapshot);
                 volTensorField& tensor_ = tensorFields[fieldName]();
 
-                forAll(tensor_.internalFieldRef(), cellI)
+                forAll(tensor_.primitiveFieldRef(), cellI)
                 {
-                    tensor_.internalFieldRef()[cellI] = snapshot[cellI];
+                    tensor_.primitiveFieldRef()[cellI] = snapshot[cellI];
                 }
 
                 tensor_.correctBoundaryConditions();

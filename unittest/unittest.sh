@@ -67,7 +67,7 @@ for version in "${versions[@]}"; do
     mpirun -np 4 apptainer exec $image bash -lc "$source && foamToNumpy -parallel" > "$log_foamToNumpy_run" 2>&1
     foamToNumpy_run_ok=$(( $? == 0 ))
 
-    ./Clean_proc_data
+    apptainer exec $image bash -lc "$source && ./Clean_proc_data"
 
     mpirun -np 4 apptainer exec $image bash -lc "$source && numpyToFoam -parallel" > "$log_numpyToFoam_run" 2>&1
     numpyToFoam_run_ok=$(( $? == 0 ))

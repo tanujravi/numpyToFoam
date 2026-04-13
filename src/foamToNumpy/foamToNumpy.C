@@ -73,7 +73,7 @@ int main(int argc, char *argv[])
         runTime,
         IOobject::MUST_READ,
         IOobject::NO_WRITE,
-        IOobject::NO_REGISTER
+        false
     );
 
     if (!DictIO.typeHeaderOk<IOdictionary>(true))
@@ -145,7 +145,6 @@ int main(int argc, char *argv[])
     {
         mkDir(dataDir);
     }
-    Pstream::barrier(UPstream::worldComm);
 
     instantList allTimes = runTime.times();
     instantList selectedTimes;
@@ -217,8 +216,8 @@ int main(int argc, char *argv[])
                 mkDir(fieldDir);
             }
         }
-        Pstream::broadcast(skipField);
-        Pstream::barrier(UPstream::worldComm);
+        
+        reduce(skipField, orOp<bool>());        
         
         if (skipField)
         {
@@ -232,7 +231,7 @@ int main(int argc, char *argv[])
             mesh,
             IOobject::MUST_READ,
             IOobject::NO_WRITE,
-            IOobject::NO_REGISTER
+            false
         );
 
         if (!io.typeHeaderOk<regIOobject>(false))
@@ -344,7 +343,7 @@ int main(int argc, char *argv[])
                     mesh,
                     IOobject::MUST_READ,
                     IOobject::NO_WRITE,
-                    IOobject::NO_REGISTER
+                    false
                 );
 
                 volScalarField fld(io, mesh);
@@ -375,7 +374,7 @@ int main(int argc, char *argv[])
                     mesh,
                     IOobject::MUST_READ,
                     IOobject::NO_WRITE,
-                    IOobject::NO_REGISTER
+                    false
                 );
 
                 volVectorField fld(io, mesh);
@@ -406,7 +405,7 @@ int main(int argc, char *argv[])
                     mesh,
                     IOobject::MUST_READ,
                     IOobject::NO_WRITE,
-                    IOobject::NO_REGISTER
+                    false
                 );
 
                 volSymmTensorField fld(io, mesh);
@@ -437,7 +436,7 @@ int main(int argc, char *argv[])
                     mesh,
                     IOobject::MUST_READ,
                     IOobject::NO_WRITE,
-                    IOobject::NO_REGISTER
+                    false
                 );
 
                 volTensorField fld(io, mesh);
@@ -521,8 +520,7 @@ int main(int argc, char *argv[])
             }
         }
 
-        Pstream::broadcast(skipCellCentre);
-        Pstream::barrier(UPstream::worldComm);
+        reduce(skipCellCentre, orOp<bool>());  
 
         if (!skipCellCentre)
         {
@@ -590,9 +588,7 @@ int main(int argc, char *argv[])
                 mkDir(volDir);
             }
         }
-
-        Pstream::broadcast(skipCellVolumes);
-        Pstream::barrier(UPstream::worldComm);
+        reduce(skipCellVolumes, orOp<bool>());
 
         if (!skipCellVolumes)
         {
