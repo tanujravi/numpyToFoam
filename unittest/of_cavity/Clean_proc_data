@@ -1,0 +1,13 @@
+#!/bin/sh
+cd "${0%/*}" || exit                                # Run from this directory
+. ${WM_PROJECT_DIR:?}/bin/tools/CleanFunctions        # Tutorial run functions
+#------------------------------------------------------------------------------
+
+rm -rf postProcessing
+find . -maxdepth 1 -type d -name 'processor*' | while read -r d; do
+    find "$d" -mindepth 1 -maxdepth 1 \
+        ! -name 0 \
+        ! -name constant \
+        ! -name system \
+        -exec rm -rf {} +
+done

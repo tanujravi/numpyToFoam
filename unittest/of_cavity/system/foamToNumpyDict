@@ -1,0 +1,39 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  9
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    object      foamToNumpyDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+dataDir       data;
+fields
+{ 
+    names       (p U);
+    dataType    float64;
+}
+exportData
+{
+    cellCentre   true;
+    cellVolumes  true;
+    writeTimes   true;
+    dataType     float64;
+}
+storageOrder   F;         // F or C
+time          
+{
+    startTime     0.1;
+    endTime       0.5;
+    every         1;
+}
+
+
+
+
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
