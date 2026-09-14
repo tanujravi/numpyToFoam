@@ -51,6 +51,7 @@ SourceFiles
 #include "numpyInputCatalog.H"
 #include "volFieldsFwd.H"
 #include "wordList.H"
+#include "numpyCellZones.H"
 
 #include <memory>
 
@@ -73,6 +74,10 @@ class numpyToFoam
 
         //- Exact field names to import
         wordList fieldNames_;
+        bool zoneMode_ = false;
+        wordRes zoneSelection_;
+        std::vector<numpyDetail::cellZoneAddressing> zones_;
+
 
         //- Instance containing field templates
         word templateInstance_;
@@ -99,6 +104,9 @@ class numpyToFoam
 
     // Private Member Functions
 
+        //- Validate source layout and current mesh before assigning values
+        void validateZones(const numpyDetail::numpyInputCatalog::snapshot&);
+
         //- Determine a registered or template field class
         word fieldClass(const word& fieldName) const;
 
@@ -116,7 +124,8 @@ class numpyToFoam
         (
             const numpyDetail::numpyInputCatalog::snapshot& sample,
             const word& fieldName,
-            HashPtrTable<GeoField>& ownedFields
+            HashPtrTable<GeoField>& ownedFields,
+            bool validateOnly = false
         );
 
         //- Correct patches unless they require an active model calculation

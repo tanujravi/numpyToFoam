@@ -39,6 +39,11 @@ void Foam::functionObjects::numpyDetail::numpyFileReader::readField
     Field<Type>& values
 ) const
 {
+    if (integer_)
+    {
+        FatalErrorInFunction << "Expected floating-point field in " << path_
+            << exit(FatalError);
+    }
     const direction nComponents = pTraits<Type>::nComponents;
     const bool scalarType = (nComponents == 1);
     const std::size_t expectedRank = scalarType ? 2u : 3u;

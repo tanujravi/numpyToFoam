@@ -114,6 +114,7 @@ Foam::functionObjects::numpyDetail::numpyFileReader::numpyFileReader
 :
     path_(path),
     dtype_(dataType::FLOAT64),
+    integer_(false),
     shape_(),
     dataStart_(0)
 {
@@ -189,11 +190,15 @@ Foam::functionObjects::numpyDetail::numpyFileReader::numpyFileReader
     {
         dtype_ = dataType::FLOAT32;
     }
+    else if (dtype == "<i8" || dtype == "=i8")
+    {
+        integer_ = true;
+    }
     else
     {
         FatalErrorInFunction
             << "Unsupported NumPy dtype '" << dtype << "' in " << path_
-            << ". Expected little-endian float32 or float64."
+            << ". Expected little-endian float32, float64, or int64 addressing."
             << exit(FatalError);
     }
 
@@ -248,7 +253,7 @@ Foam::functionObjects::numpyDetail::numpyFileReader::readValue
 Foam::scalarField
 Foam::functionObjects::numpyDetail::numpyFileReader::readScalarArray() const
 {
-    if (shape_.size() != 1)
+    if (integer_ || shape_.size() != 1)
     {
         FatalErrorInFunction
             << "Expected a one-dimensional scalar array in " << path_
@@ -274,5 +279,37 @@ Foam::functionObjects::numpyDetail::numpyFileReader::readScalarArray() const
     return values;
 }
 
+
+Foam::labelList
+Foam::functionObjects::numpyDetail::numpyFileReader::readCellIds() const
+{
+    if (!integer_ || shape_.size() != 1)
+    {
+        FatalErrorInFunction << "Expected one-dimensional int64 cell IDs in "
+            << path_ << exit(FatalError);
+    }
+    labelList ids(shape_[0]);
+    std::ifstream is(path_.c_str(), std::ios::binary);
+    is.seekg(dataStart_);
+    for (label& id : ids)
+    {
+        // Decode little-endian explicitly, independent of host byte order.
+        std::uint64_t value = 0;
+        for (unsigned b = 0; b < 8; ++b)
+            value |= std::uint64_t(static_cast<unsigned char>(is.get())) << (8*b);
+        if (!is.good() || value > std::uint64_t(labelMax))
+        {
+            FatalErrorInFunction << "Invalid or truncated cell ID in " << path_
+                << exit(FatalError);
+        }
+        id = label(value);
+    }
+    if (is.peek() != std::ifstream::traits_type::eof())
+    {
+        FatalErrorInFunction << "Trailing cell ID payload in " << path_
+            << exit(FatalError);
+    }
+    return ids;
+}
 
 // ************************************************************************* //

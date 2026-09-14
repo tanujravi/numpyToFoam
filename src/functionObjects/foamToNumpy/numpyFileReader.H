@@ -29,7 +29,7 @@ Class
     Foam::functionObjects::numpyDetail::numpyFileReader
 
 Description
-    Reader for little-endian float32/float64 Fortran-order NumPy files.
+    Reader for little-endian float32/float64 fields and int64 cell mappings.
 
     The reader intentionally supports only the representation emitted by the
     NumPy function objects. In particular, C-order arrays are rejected.
@@ -73,6 +73,8 @@ class numpyFileReader
 
         //- Numeric data type
         dataType dtype_;
+        //- True only for dedicated int64 addressing arrays
+        bool integer_;
 
         //- Array shape
         std::vector<label> shape_;
@@ -123,6 +125,8 @@ public:
 
         //- Read a one-dimensional scalar array
         scalarField readScalarArray() const;
+
+        labelList readCellIds() const;
 
         //- Read one field snapshot
         template<class Type>

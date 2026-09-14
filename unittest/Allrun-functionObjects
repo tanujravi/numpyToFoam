@@ -12,6 +12,8 @@ python_check="$PWD/check_numpy_roundtrip.py"
 python_forces="$PWD/check_forces.py"
 python_layout="$PWD/check_function_object.py"
 
+python3 "$PWD/check_cell_zones.py"
+
 echo "Running volume function-object tests in $test_dir"
 "$prepare_cavity" "$test_dir/cavity"
 

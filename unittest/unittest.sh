@@ -61,6 +61,8 @@ for version in "${versions[@]}"; do
         -exec rm -rf -- {} +
     cp -a \
         "$script_dir/Allrun-functionObjects" \
+        "$script_dir/check_cell_zones.py" \
+        "$script_dir/zoneLifecycle.C" \
         "$script_dir/check_forces.py" \
         "$script_dir/check_function_object.py" \
         "$script_dir/check_numpy_roundtrip.py" \

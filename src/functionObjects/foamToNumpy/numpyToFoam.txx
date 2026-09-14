@@ -167,9 +167,33 @@ void Foam::functionObjects::numpyToFoam::loadField
 (
     const numpyDetail::numpyInputCatalog::snapshot& sample,
     const word& fieldName,
-    HashPtrTable<GeoField>& ownedFields
+    HashPtrTable<GeoField>& ownedFields,
+    const bool validateOnly
 )
 {
+    if (zoneMode_)
+    {
+        for (const auto& zone : zones_)
+        {
+            numpyDetail::numpyFileReader reader
+                (catalog_->fieldPath(sample, fieldName, Pstream::myProcNo(), zone.name));
+            Field<typename GeoField::value_type> values;
+            reader.readField(sample.index, zone.cells.size(), values);
+            if (!validateOnly)
+            {
+                GeoField& target = field<GeoField>(fieldName, ownedFields);
+                auto& internal = target.primitiveFieldRef();
+                forAll(values, i) internal[zone.cells[i]] = values[i];
+            }
+        }
+        if (!validateOnly)
+        {
+            GeoField& target = field<GeoField>(fieldName, ownedFields);
+            if (correctBoundaryConditions_) correctFieldBoundaryConditions(target);
+            if (!target.nOldTimes()) (void)target.oldTime();
+        }
+        return;
+    }
     GeoField& target = field<GeoField>(fieldName, ownedFields);
     const fileName inputFile
     (
