@@ -32,6 +32,7 @@ License
 #include "OSspecific.H"
 #include "Pstream.H"
 #include "numpyFileReader.H"
+#include "numpyCellZones.H"
 
 #include <algorithm>
 
@@ -265,13 +266,22 @@ Foam::functionObjects::numpyDetail::numpyInputCatalog::fieldPath
 (
     const snapshot& sample,
     const word& fieldName,
-    const label proci
+    const label proci,
+    const word& zone
 ) const
 {
+    const fileName directory = zone.empty() ? sample.batchPath
+        : sample.batchPath/"cellZones"/zone;
     return
-        sample.batchPath
+        directory
        /(fieldName + "_proc_" + Foam::name(proci) + ".npy");
 }
 
+
+Foam::fileName Foam::functionObjects::numpyDetail::numpyInputCatalog::geometryPath
+(const snapshot& sample) const
+{
+    return sample.batchPath.path()/revisionName(sample.meshRevision);
+}
 
 // ************************************************************************* //

@@ -1,6 +1,7 @@
 foamNumpyCoreCompat.C
 foamNumpyCoreAdapter.C
 numpyFileReader.C
+numpyCellZones.C
 numpyInputCatalog.C
 numpyFileWriter.C
 foamToNumpy.C

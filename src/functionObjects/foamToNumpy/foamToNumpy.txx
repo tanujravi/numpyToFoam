@@ -136,15 +136,31 @@ bool Foam::functionObjects::foamToNumpy::appendField
         }
 
         const GeoField field(io, mesh_);
-        numpyDetail::numpyFileWriter* writer = fieldWriters_[fieldName];
-        writer->appendField(field.primitiveField());
+        appendValues(fieldName, field.primitiveField());
         return true;
     }
 
-    numpyDetail::numpyFileWriter* writer = fieldWriters_[fieldName];
-    writer->appendField(fieldPtr->primitiveField());
+    appendValues(fieldName, fieldPtr->primitiveField());
     return true;
 }
 
+
+template<class Type>
+void Foam::functionObjects::foamToNumpy::appendValues
+(const word& name, const Field<Type>& values)
+{
+    if (!zoneMode_)
+    {
+        fieldWriters_[name]->appendField(values);
+        return;
+    }
+    label zi = 0;
+    for (const auto& zone : zones_)
+    {
+        Field<Type> subset(zone.cells.size());
+        forAll(subset, i) subset[i] = values[zone.cells[i]];
+        fieldWriters_[Foam::name(zi++) + "_" + name]->appendField(subset);
+    }
+}
 
 // ************************************************************************* //

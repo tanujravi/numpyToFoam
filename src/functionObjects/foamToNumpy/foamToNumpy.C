@@ -188,31 +188,25 @@ void Foam::functionObjects::foamToNumpy::beginBatch
     batchFields_ = fields;
     fieldWriters_.clear();
 
-    for (const fieldInfo& info : batchFields_)
+    const label datasets = zoneMode_ ? zones_.size() : 1;
+    for (label zi = 0; zi < datasets; ++zi)
     {
-        std::vector<label> dimensions(1, info.localSize);
-
-        if (info.nComponents > 1)
+        const fileName directory = zoneMode_
+            ? batchPath_/"cellZones"/zones_[zi].name : batchPath_;
+        if (Pstream::master()) mkDir(directory);
+        UPstream::barrier(UPstream::worldComm);
+        for (const fieldInfo& info : batchFields_)
         {
-            dimensions.push_back(info.nComponents);
-        }
-
-        const fileName outputFile
-        (
-            batchPath_
-           /(info.name + "_proc_" + Foam::name(Pstream::myProcNo()) + ".npy")
-        );
-
-        fieldWriters_.set
-        (
-            info.name,
-            new numpyDetail::numpyFileWriter
+            std::vector<label> dimensions
+                (1, zoneMode_ ? zones_[zi].cells.size() : info.localSize);
+            if (info.nComponents > 1) dimensions.push_back(info.nComponents);
+            const word key = zoneMode_ ? word(Foam::name(zi) + "_" + info.name) : info.name;
+            fieldWriters_.set(key, new numpyDetail::numpyFileWriter
             (
-                outputFile,
-                dimensions,
-                dtype_
-            )
-        );
+                directory/(info.name + "_proc_" + Foam::name(Pstream::myProcNo()) + ".npy"),
+                dimensions, dtype_
+            ));
+        }
     }
 
     if (writeTimes_ && Pstream::master())
@@ -312,6 +306,12 @@ void Foam::functionObjects::foamToNumpy::writeState(bool sealed) const
                 << token::END_STATEMENT << nl;
         }
         os << token::END_BLOCK << nl;
+        if (zoneMode_)
+        {
+            wordList names;
+            for (const auto& zone : zones_) names.push_back(zone.name);
+            os << "zoneLayoutVersion 1;" << nl << "cellZones " << names << ";" << nl;
+        }
     }
 
     if (!mv(temporaryFile, stateFile))
@@ -342,6 +342,12 @@ void Foam::functionObjects::foamToNumpy::writeSegmentInfo() const
         << token::END_BLOCK << nl;
     IOobject::writeDivider(os) << nl;
 
+    if (zoneMode_)
+    {
+        os << "zoneLayoutVersion 1;" << nl
+           << "region " << mesh_.name() << ";" << nl
+           << "nProcs " << Pstream::nProcs() << ";" << nl;
+    }
     os  << "startTime       " << time_.startTime().value()
         << token::END_STATEMENT << nl
         << "firstOutput     " << time_.value() << token::END_STATEMENT << nl
@@ -356,7 +362,7 @@ void Foam::functionObjects::foamToNumpy::writeSegmentInfo() const
 
 void Foam::functionObjects::foamToNumpy::writeGeometry()
 {
-    if (!geometryDirty_ || (!writeCellCentres_ && !writeCellVolumes_))
+    if (!geometryDirty_ || (!zoneMode_ && !writeCellCentres_ && !writeCellVolumes_))
     {
         geometryDirty_ = false;
         return;
@@ -380,6 +386,42 @@ void Foam::functionObjects::foamToNumpy::writeGeometry()
         "_proc_" + Foam::name(Pstream::myProcNo()) + ".npy"
     );
 
+    if (zoneMode_)
+    {
+        // Geometry construction can communicate across processor patches.
+        // Every rank must initialise it, even if all its selected zones are empty.
+        const vectorField* centres = writeCellCentres_
+            ? &mesh_.C().primitiveField() : nullptr;
+        const scalarField* volumes = writeCellVolumes_ ? &mesh_.V() : nullptr;
+        OFstream metadata(geometryPath/("mesh_proc_" + Foam::name(Pstream::myProcNo())));
+        metadata << "nCells " << mesh_.nCells() << ";" << nl
+            << "meshRevision " << meshRevision_ << ";" << nl;
+        for (const auto& zone : zones_)
+        {
+            const fileName directory(geometryPath/"cellZones"/zone.name);
+            if (Pstream::master()) mkDir(directory);
+            UPstream::barrier(UPstream::worldComm);
+            numpyDetail::writeCellIds(directory/("cellIds" + procSuffix), zone.cells);
+            if (writeCellCentres_)
+            {
+                vectorField values(zone.cells.size());
+                forAll(values, i) values[i] = (*centres)[zone.cells[i]];
+                numpyDetail::numpyFileWriter writer
+                    (directory/("cellCentres" + procSuffix), {values.size(), 3}, dtype_);
+                writer.appendField(values);
+            }
+            if (writeCellVolumes_)
+            {
+                scalarField values(zone.cells.size());
+                forAll(values, i) values[i] = (*volumes)[zone.cells[i]];
+                numpyDetail::numpyFileWriter writer
+                    (directory/("cellVolumes" + procSuffix), {values.size()}, dtype_);
+                writer.appendField(values);
+            }
+        }
+        geometryDirty_ = false;
+        return;
+    }
     if (writeCellCentres_)
     {
         const vectorField& centres = mesh_.C().primitiveField();
@@ -442,6 +484,19 @@ bool Foam::functionObjects::foamToNumpy::read(const dictionary& dict)
             << exit(FatalIOError);
     }
 
+    const bool newZoneMode = dict.found("cellZones");
+    wordRes newZones;
+    if (newZoneMode)
+    {
+        dict.readEntry("cellZones", newZones);
+        if (newZones.empty())
+            FatalIOErrorInFunction(dict) << "cellZones must not be empty" << exit(FatalIOError);
+    }
+    if (segmentReady_ && (newZoneMode != zoneMode_ || newZones != zoneSelection_))
+        FatalIOErrorInFunction(dict) << "cellZones cannot change after the first snapshot"
+            << exit(FatalIOError);
+    zoneMode_ = newZoneMode;
+    zoneSelection_ = newZones;
     wordRes newFieldSelection;
     dict.readEntry("fields", newFieldSelection);
     newFieldSelection.uniq();
@@ -559,6 +614,14 @@ bool Foam::functionObjects::foamToNumpy::write()
             << exit(FatalError);
     }
 
+    if (zoneMode_)
+    {
+        auto mappings = numpyDetail::cellZoneMappings(mesh_, zoneSelection_);
+        bool changed = mappings != zones_;
+        reduce(changed, orOp<bool>());
+        if (changed && segmentReady_) meshChanged();
+        zones_ = std::move(mappings);
+    }
     const std::vector<fieldInfo> fields(selectedFields());
 
     if (!batchOpen_)

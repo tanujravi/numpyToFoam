@@ -27,6 +27,9 @@ License
 \*---------------------------------------------------------------------------*/
 
 #include "numpyToFoam.H"
+#include "IFstream.H"
+#include "numpyFileReader.H"
+#include "PstreamReduceOps.H"
 
 #include "IOobject.H"
 #include "ListOps.H"
@@ -143,6 +146,19 @@ bool Foam::functionObjects::numpyToFoam::read(const dictionary& dict)
 {
     fvMeshFunctionObject::read(dict);
 
+    const bool newZoneMode = dict.found("cellZones");
+    wordRes newZones;
+    if (newZoneMode)
+    {
+        dict.readEntry("cellZones", newZones);
+        if (newZones.empty())
+            FatalIOErrorInFunction(dict) << "cellZones must not be empty" << exit(FatalIOError);
+    }
+    if (catalog_ && (newZoneMode != zoneMode_ || newZones != zoneSelection_))
+        FatalIOErrorInFunction(dict) << "Input cellZones cannot change after construction"
+            << exit(FatalIOError);
+    zoneMode_ = newZoneMode;
+    zoneSelection_ = newZones;
     wordList newFieldNames(dict.get<wordList>("fields"));
     inplaceUniqueSort(newFieldNames);
 
@@ -204,37 +220,45 @@ bool Foam::functionObjects::numpyToFoam::load(const scalar timeValue)
     const numpyDetail::numpyInputCatalog::snapshot& sample =
         catalog_->find(timeValue);
 
-    for (const word& fieldName : fieldNames_)
+    validateZones(sample);
+    // Validate all selected payloads before modifying any registered field.
+    for (int pass = zoneMode_ ? 0 : 1; pass < 2; ++pass)
     {
-        const word className(fieldClass(fieldName));
+        const bool validateOnly = pass == 0;
+        for (const word& fieldName : fieldNames_)
+        {
+            const word className(fieldClass(fieldName));
 
-        if (className == volScalarField::typeName)
-        {
-            loadField(sample, fieldName, scalarFields_);
+            if (className == volScalarField::typeName)
+            {
+                loadField(sample, fieldName, scalarFields_, validateOnly);
+            }
+            else if (className == volVectorField::typeName)
+            {
+                loadField(sample, fieldName, vectorFields_, validateOnly);
+            }
+            else if (className == volSphericalTensorField::typeName)
+            {
+                loadField(sample, fieldName, sphericalTensorFields_, validateOnly);
+            }
+            else if (className == volSymmTensorField::typeName)
+            {
+                loadField(sample, fieldName, symmTensorFields_, validateOnly);
+            }
+            else if (className == volTensorField::typeName)
+            {
+                loadField(sample, fieldName, tensorFields_, validateOnly);
+            }
+            else
+            {
+                FatalErrorInFunction
+                    << "Unsupported class " << className
+                    << " for imported field " << fieldName
+                    << exit(FatalError);
+            }
         }
-        else if (className == volVectorField::typeName)
-        {
-            loadField(sample, fieldName, vectorFields_);
-        }
-        else if (className == volSphericalTensorField::typeName)
-        {
-            loadField(sample, fieldName, sphericalTensorFields_);
-        }
-        else if (className == volSymmTensorField::typeName)
-        {
-            loadField(sample, fieldName, symmTensorFields_);
-        }
-        else if (className == volTensorField::typeName)
-        {
-            loadField(sample, fieldName, tensorFields_);
-        }
-        else
-        {
-            FatalErrorInFunction
-                << "Unsupported class " << className
-                << " for imported field " << fieldName
-                << exit(FatalError);
-        }
+
+        UPstream::barrier(UPstream::worldComm);
     }
 
     lastTime_ = timeValue;
@@ -345,5 +369,61 @@ Foam::scalarList Foam::functionObjects::numpyToFoam::times() const
     return catalog_->times();
 }
 
+
+void Foam::functionObjects::numpyToFoam::validateZones
+(const numpyDetail::numpyInputCatalog::snapshot& sample)
+{
+    IFstream segmentStream(sample.batchPath.path()/"segmentInfo");
+    dictionary segment(segmentStream);
+    IFstream stateStream(sample.batchPath/"state");
+    dictionary state(stateStream);
+    const bool zoneData = segment.found("zoneLayoutVersion");
+    if (zoneData != zoneMode_ || state.found("zoneLayoutVersion") != zoneData)
+        FatalErrorInFunction << "Zone datasets require explicit cellZones; "
+            << "whole-mesh datasets cannot be imported as zones" << exit(FatalError);
+    if (!zoneData) return;
+    if (segment.get<label>("zoneLayoutVersion") != 1
+        || state.get<label>("zoneLayoutVersion") != 1)
+        FatalErrorInFunction << "Unsupported zone layout version" << exit(FatalError);
+    if (segment.get<word>("region") != mesh_.name()
+        || segment.get<label>("nProcs") != Pstream::nProcs())
+        FatalErrorInFunction << "Zone mesh region or processor count mismatch"
+            << exit(FatalError);
+    const wordList exported(state.get<wordList>("cellZones"));
+    const wordList selected(numpyDetail::selectCellZoneNames(zoneSelection_, exported));
+    zones_ = numpyDetail::cellZoneMappings(mesh_, zoneSelection_);
+    wordList targetNames;
+    for (const auto& zone : zones_) targetNames.push_back(zone.name);
+    if (targetNames != selected)
+        FatalErrorInFunction << "Source and target zone selections differ" << exit(FatalError);
+    const fileName geometry(catalog_->geometryPath(sample));
+    IFstream meshStream(geometry/("mesh_proc_" + Foam::name(Pstream::myProcNo())));
+    dictionary metadata(meshStream);
+    if (metadata.get<label>("nCells") != mesh_.nCells()
+        || metadata.get<label>("meshRevision") != sample.meshRevision)
+        FatalErrorInFunction << "Zone mesh size or mapping revision mismatch" << exit(FatalError);
+    labelHashSet occupied;
+    bool overlap = false;
+    for (const auto& zone : zones_)
+    {
+        numpyDetail::numpyFileReader reader
+        (
+            geometry/"cellZones"/zone.name
+            /("cellIds_proc_" + Foam::name(Pstream::myProcNo()) + ".npy")
+        );
+        const labelList ids(reader.readCellIds());
+        if (ids != zone.cells)
+            FatalErrorInFunction << "Cell addressing mismatch for zone " << zone.name
+                << "; the original numbering and membership are required" << exit(FatalError);
+        for (label id : ids) if (!occupied.insert(id)) overlap = true;
+    }
+    reduce(overlap, orOp<bool>());
+    if (overlap)
+        FatalErrorInFunction << "Imported cellZones overlap" << exit(FatalError);
+    const dictionary& classes = state.subDict("fieldClasses");
+    for (const word& name : fieldNames_)
+        if (classes.get<word>(name) != fieldClass(name))
+            FatalErrorInFunction << "Field class mismatch for " << name << exit(FatalError);
+}
 
 // ************************************************************************* //

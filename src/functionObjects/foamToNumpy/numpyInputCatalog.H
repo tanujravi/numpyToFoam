@@ -124,8 +124,11 @@ public:
         (
             const snapshot& sample,
             const word& fieldName,
-            label proci
+            label proci,
+            const word& zone = word::null
         ) const;
+
+        fileName geometryPath(const snapshot& sample) const;
 };
 
 

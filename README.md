@@ -147,6 +147,83 @@ wall functions and `fixedFluxPressure` must be updated by their owning models.
 Set `correctBoundaryConditions true` only when every imported field can be
 corrected independently. `writeFields` is opt-in.
 
+## Cell-zone subsets
+
+Volume function objects can exchange separate arrays for named cell zones:
+
+```text
+// In a foamToNumpy function-object dictionary:
+fields          (p U);
+cellZones       (fluidCore "porous.*");
+
+// In numpyToFoam, or numpyPostProcessDict.input:
+inputDir        "postProcessing/numpyExport";
+segment         "0";
+fields          (p U);
+cellZones       (fluidCore);
+templateInstance "0";
+```
+
+Omitting `cellZones` retains whole-mesh exchange. Every supplied name or regular
+expression must match at least one zone; an empty selection is an error.
+Existing empty zones are valid, including zones with no cells on a particular
+processor. Zone imports require explicit `cellZones` and may select only some
+of the exported zones. Whole-mesh datasets cannot be read as zone datasets.
+
+Each exported zone contains the same selected fields. Overlapping export zones
+are allowed and duplicate their shared values. **Zones selected together for
+import must be disjoint**, even when shared values agree. Imported values replace
+only selected internal cells. Other cells retain registered field values, or
+values from `templateInstance` when a field is first created. Subsequent solver,
+boundary, and `numpyPostProcess` model corrections still operate on full fields
+and can change values outside the imported zones.
+
+Zone output retains shared batch times and a single atomic commit state:
+
+```text
+<segment>/
+├── segmentInfo                 # zoneLayoutVersion 1, region, nProcs
+├── batch_000000/
+│   ├── state                   # count, meshRevision, cellZones, fieldClasses
+│   ├── times.npy
+│   └── cellZones/fluidCore/
+│       ├── p_proc_0.npy
+│       └── U_proc_0.npy
+└── geometry_000000/
+    ├── mesh_proc_0             # nCells, meshRevision
+    └── cellZones/fluidCore/
+        ├── cellIds_proc_0.npy  # mandatory, even with geometry output disabled
+        ├── cellCentres_proc_0.npy
+        └── cellVolumes_proc_0.npy
+```
+
+Cell IDs are one-dimensional, signed 64-bit integer arrays in ascending
+processor-local cell order. Fields and optional geometry use exactly that row
+order. Field shapes are `(nZoneCells, nOutputs)` for scalar and spherical-tensor
+fields and `(nZoneCells, nComponents, nOutputs)` otherwise. Geometry retains the
+existing trailing singleton snapshot dimension. All arrays explicitly specify
+Fortran order; scripts rewriting even one-dimensional ID arrays must preserve
+that header flag. Floating-point `dataType` applies only to fields and geometry.
+
+Topology callbacks and changes to selected zone membership close the current
+batch and produce a new mapping revision, including when membership changes
+without changing its size. Import validates region, processor count, local mesh
+size, sorted cell IDs, zone membership, field classes, and payloads before
+assigning zone values. Restart precedence and committed-count rules also apply
+to zone data. Selection and output settings cannot change after export starts.
+
+Import requires the original mesh cell numbering and parallel decomposition;
+it performs no interpolation, redistribution, zone creation, or mesh advancement.
+Membership checks cannot establish equivalence of arbitrary different meshes.
+When importing changing mappings, the caller must provide the matching current
+mesh. `numpyPostProcess` does not reconstruct or advance mesh topology.
+
+Storage scales with the sum of selected zone sizes. Export and import process
+one zone/field buffer at a time; import preflights payloads before rereading them
+for assignment to avoid partially updating fields on malformed input. This
+feature applies to the volume function objects and driver, not the legacy
+standalone applications or finite-area fields.
+
 ## `numpyPostProcess`
 
 The driver imports fields and runs the `functions` dictionary in the same

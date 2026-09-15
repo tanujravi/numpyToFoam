@@ -67,6 +67,7 @@ Usage
     \table
       Property          | Description                         | Type | Req'd | Dflt
       fields            | Volume field names or expressions   | wordRes | yes | -
+      cellZones         | Optional cell-zone names/expressions | wordRes | no | -
       dataType          | NumPy precision: float32/float64    | word | no | float64
       batchSize         | Maximum snapshots in a batch        | label | no | 100
       writeTimes        | Write batch time arrays             | bool | no | true
@@ -91,6 +92,7 @@ SourceFiles
 #include "numpyFileWriter.H"
 #include "polyMesh.H"
 #include "wordRes.H"
+#include "numpyCellZones.H"
 
 #include <memory>
 #include <vector>
@@ -125,6 +127,9 @@ class foamToNumpy
 
         //- Selected volume fields
         wordRes fieldSelection_;
+        wordRes zoneSelection_;
+        std::vector<numpyDetail::cellZoneAddressing> zones_;
+        bool zoneMode_ = false;
 
         //- Output data type
         numpyDetail::dataType dtype_;
@@ -201,6 +206,9 @@ class foamToNumpy
         //- Append a field if it has the requested geometric type
         template<class GeoField>
         bool appendField(const word& fieldName);
+
+        template<class Type>
+        void appendValues(const word&, const Field<Type>&);
 
         //- Create a unique start-time segment for this invocation
         void ensureSegment();
